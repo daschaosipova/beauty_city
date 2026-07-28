@@ -3,22 +3,15 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 
 from bot_manager.models import Client
 from bot_manager.handlers.states_utils import BookingProcess, FlowCallback
 
 start_router = Router()
 
-@start_router.message(CommandStart())
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    
-    # Регистрация клиента в БД Django
-    client, _ = await sync_to_async(Client.objects.get_or_create)(
-        telegram_id=message.from_user.id,
-        defaults={'username': message.from_user.username or ""}
-    )
-    
+# Функция отрисовки главного меню (вынесли отдельно, чтобы вызывать из двух мест)
+async def show_main_menu(message: types.Message, state: FSMContext, user_first_name: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="📍 1. Выбрать ближайший салон", callback_data=FlowCallback(name="salon").pack())
     builder.button(text="⭐ 2. Записаться к любимому мастеру", callback_data=FlowCallback(name="master").pack())
@@ -27,11 +20,63 @@ async def cmd_start(message: types.Message, state: FSMContext):
     builder.adjust(1)
     
     await message.answer(
-        f"Здравствуйте, {message.from_user.first_name}! Вас приветствует сеть салонов красоты Ольги.\n"
+        f"Здравствуйте, {user_first_name}! Вас приветствует сеть салонов красоты Ольги.\n"
         f"Как бы вы хотели оформить запись?",
         reply_markup=builder.as_markup()
     )
     await state.set_state(BookingProcess.choosing_flow)
+
+
+@start_router.message(CommandStart())
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
+    
+    # Регистрация / получение клиента из БД Django
+    client, _ = await sync_to_async(Client.objects.get_or_create)(
+        telegram_id=message.from_user.id,
+        defaults={'username': message.from_user.username or ""}
+    )
+    
+    # ПРОВЕРКА ЮРИДИЧЕСКОГО БЛОКА
+    if not client.is_terms_accepted:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Принять и продолжить", callback_data="accept_terms")
+        
+        await message.answer(
+            "Добро пожаловать!\n\nДля продолжения работы с ботом, пожалуйста, "
+            "ознакомьтесь с Политикой обработки персональных данных (ФЗ-152).\n"
+            "Нажимая кнопку ниже, вы даете согласие на обработку данных.",
+            reply_markup=builder.as_markup()
+        )
+        return  # Прерываем выполнение, меню флоу НЕ показываем
+        
+    # Если клиент уже принимал соглашение ранее, сразу показываем главное меню
+    await show_main_menu(message, state, message.from_user.first_name)
+
+
+# ОБРАБОТЧИК НАЖАТИЙ НА КНОПКУ «ПРИНЯТЬ СОГЛАШЕНИЕ»
+@start_router.callback_query(F.data == "accept_terms")
+async def handle_accept_terms(callback: types.CallbackQuery, state: FSMContext):
+    # Обновляем флаг согласия и пишем текущую дату/время в базу данных Django
+    def update_client_terms():
+        try:
+            client = Client.objects.get(telegram_id=callback.from_user.id)
+            client.is_terms_accepted = True
+            client.terms_accepted_at = timezone.now()  # Записываем точное время принятия
+            client.save()
+            return True
+        except Client.DoesNotExist:
+            return False
+
+    await sync_to_async(update_client_terms)()
+    
+    # Удаляем сообщение с офертой, чтобы не засорять историю
+    await callback.message.delete()
+    
+    # Показываем главное меню
+    await show_main_menu(callback.message, state, callback.from_user.first_name)
+    await callback.answer("Спасибо! Согласие принято.")
+
 
 @start_router.callback_query(FlowCallback.filter(), BookingProcess.choosing_flow)
 async def handle_flow_selection(callback: types.CallbackQuery, callback_data: FlowCallback, state: FSMContext):
@@ -49,7 +94,6 @@ async def handle_flow_selection(callback: types.CallbackQuery, callback_data: Fl
         await state.clear()
         return
 
-    # Импортируем функции динамически для предотвращения круговых импортов
     from bot_manager.handlers.booking import show_salon_selection, show_master_selection, show_service_selection
 
     if flow == "salon":
@@ -60,3 +104,4 @@ async def handle_flow_selection(callback: types.CallbackQuery, callback_data: Fl
         await show_service_selection(callback.message, state)
         
     await callback.answer()
+
