@@ -1,5 +1,6 @@
 import datetime
-from aiogram import Router, types, F
+import asyncio
+from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from asgiref.sync import sync_to_async
@@ -9,6 +10,7 @@ from bot_manager.handlers.states_utils import (
     BookingProcess, SalonCallback, ServiceCallback, MasterCallback, SlotCallback
 )
 
+waiting_feedback = {}
 booking_router = Router()
 
 # ==========================================
@@ -139,6 +141,32 @@ async def request_phone(message: types.Message, state: FSMContext):
     await state.set_state(BookingProcess.entering_phone)
 
 
+# =====================================================================
+# СЛУЖЕБНАЯ ФУНКЦИЯ: Отложенный запрос отзыва
+# =====================================================================
+async def ask_feedback_later(chat_id: int, appointment_id: int, bot: Bot):
+    """Отправит запрос отзыва через 5 секунд после создания записи"""
+    await asyncio.sleep(5)
+
+    try:
+        appointment = await sync_to_async(Appointment.objects.get)(id=appointment_id)
+        if appointment.feedback or appointment.feedback_asked:
+            return
+    except Appointment.DoesNotExist:
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Оставить отзыв", callback_data=f"leave_feedback_{appointment_id}")
+    builder.button(text="Позже", callback_data=f"skip_feedback_{appointment_id}")
+    builder.adjust(1)
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="Как прошёл визит?\n\nБудем рады вашему отзыву!",
+        reply_markup=builder.as_markup()
+    )
+
+
 # ==========================================
 # ОБРАБОТЧИКИ НАЖАТИЙ (ДИСПЕТЧЕРЫ)
 # ==========================================
@@ -213,21 +241,21 @@ async def process_slot_step(callback: types.CallbackQuery, callback_data: SlotCa
 # ==========================================
 
 @booking_router.message(F.contact, BookingProcess.entering_phone)
-async def finalize_appointment_contact(message: types.Message, state: FSMContext):
+async def finalize_appointment_contact(message: types.Message, state: FSMContext, bot: Bot):
     phone = message.contact.phone_number
-    await process_appointment_creation(message, state, phone)
+    await process_appointment_creation(message, state, phone, bot=bot)
 
 
 @booking_router.message(F.text, BookingProcess.entering_phone)
-async def finalize_appointment_text(message: types.Message, state: FSMContext):
+async def finalize_appointment_text(message: types.Message, state: FSMContext, bot: Bot):
     phone = message.text.strip()
     if not any(char.isdigit() for char in phone) or len(phone) < 7:
         await message.answer("Пожалуйста, введите корректный номер телефона (например, +79XXXXXXXXX):")
         return
-    await process_appointment_creation(message, state, phone)
+    await process_appointment_creation(message, state, phone, bot=bot)
 
 
-async def process_appointment_creation(message: types.Message, state: FSMContext, phone: str):
+async def process_appointment_creation(message: types.Message, state: FSMContext, phone: str, bot: Bot):
     user_data = await state.get_data()
     
     if 'slot' not in user_data or 'service' not in user_data:
@@ -291,6 +319,16 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         reply_markup=types.ReplyKeyboardRemove(), 
         parse_mode="Markdown"
     )
+
+    # Запуск таймера на 5 секунд для отзыва(для теста)
+    asyncio.create_task(
+        ask_feedback_later(
+            chat_id=message.from_user.id,
+            appointment_id=appointment.id,
+            bot=bot
+        )
+    )
+
     await state.clear()
 
 # ==========================================
@@ -345,3 +383,53 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
             await show_service_selection(callback.message, state)
 
     await callback.answer()
+
+
+# ================================================================
+# ОБРАБОТЧИКИ ОТЗЫВОВ
+# ================================================================
+@booking_router.callback_query(F.data.startswith("leave_feedback_"))
+async def ask_feedback(callback: types.CallbackQuery, state: FSMContext):
+    appointment_id = int(callback.data.replace("leave_feedback_", ""))
+
+    await callback.answer()
+    await callback.message.edit_text(
+        "✍️ Напишите ваш отзыв в следующем сообщении (текст):"
+    )
+
+    waiting_feedback[callback.from_user.id] = appointment_id
+
+
+@booking_router.callback_query(F.data.startswith("skip_feedback_"))
+async def skip_feedback(callback: types.CallbackQuery, state: FSMContext):
+    appointment_id = int(callback.data.replace("skip_feedback_", ""))
+
+    try:
+        appointment = await sync_to_async(Appointment.objects.get)(id=appointment_id)
+        appointment.feedback_asked = True
+        await sync_to_async(appointment.save)()
+    except Appointment.DoesNotExist:
+        pass
+
+    await callback.answer("Хорошо! Если захотите оставить отзыв позже, пишите.")
+    await callback.message.edit_text("Отзыв можно оставить в любое время, просто напишите нам.")
+
+
+@booking_router.message(F.text)
+async def save_feedback(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    if user_id in waiting_feedback:
+        appointment_id = waiting_feedback.pop(user_id)
+
+        try:
+            appointment = await sync_to_async(Appointment.objects.get)(id=appointment_id)
+            appointment.feedback = message.text
+            appointment.feedback_asked = True
+            await sync_to_async(appointment.save)()
+
+            await message.answer("Спасибо за ваш отзыв! Мы ценим ваше мнение.")
+        except Appointment.DoesNotExist:
+            await message.answer("Запись не найдена. Возможно, она уже удалена.")
+    else:
+        await message.answer("Спасибо за сообщение! Если это отзыв, вы можете оставить его в любое время.")
