@@ -103,6 +103,9 @@ class Appointment(models.Model):
     tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Чаевые мастера (руб.)")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания записи")
 
+    feedback = models.TextField(blank=True, null=True, verbose_name="Текст отзыва")
+    feedback_asked = models.BooleanField(default=False, verbose_name="Уже спрашивали отзыв?")
+
     def __str__(self):
         return f"Запись {self.id}: {self.client} к {self.slot.master} на {self.slot.date}"
 
