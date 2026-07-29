@@ -299,9 +299,10 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
 
 @booking_router.callback_query(F.data == "back_to_main")
 async def back_to_main_handler(callback: types.CallbackQuery, state: FSMContext):
-    from bot_manager.handlers.start import cmd_start
+    from bot_manager.handlers.start import show_main_menu
+    await state.clear()
     await callback.message.delete()
-    await cmd_start(callback.message, state)
+    await show_main_menu(callback.message, state, callback.from_user.first_name)
     await callback.answer()
 
 
