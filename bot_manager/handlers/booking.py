@@ -113,14 +113,33 @@ async def show_service_selection(message: types.Message, state: FSMContext):
 
 async def show_master_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
+    flow = user_data.get('flow')
     
     def query_masters():
-        qs = Master.objects.filter(is_active=True)
+        # 1. Сначала находим ID всех мастеров, у которых есть свободные окна в будущем
+        slot_filters = {
+            'is_booked': False,
+            'date__gte': datetime.date.today()
+        }
+        
+        # Если салон уже выбран (Флоу №1 «Салон») — ищем слоты только в этом салоне
         if 'salon' in user_data:
-            qs = qs.filter(salons__id=user_data['salon'])
+            slot_filters['salon_id'] = user_data['salon']
+            
+        available_master_ids = TimeSlot.objects.filter(**slot_filters).values_list('master_id', flat=True).distinct()
+        
+        # 2. Фильтруем саму модель Master
+        qs = Master.objects.filter(is_active=True, id__in=available_master_ids)
+        
+        # Если услуга уже выбрана (Флоу №1 и Флоу №3) — оставляем мастеров, умеющих её делать
         if 'service' in user_data:
             qs = qs.filter(services__id=user_data['service'])
-        return list(qs)
+            
+        # На всякий случай: если зашли с шага Салона, дополнительно проверяем прямую связь ManyToMany
+        if 'salon' in user_data:
+            qs = qs.filter(salons__id=user_data['salon'])
+            
+        return list(qs.distinct())
         
     masters = await sync_to_async(query_masters)()
     builder = InlineKeyboardBuilder()
@@ -130,6 +149,16 @@ async def show_master_selection(message: types.Message, state: FSMContext):
         
     builder.button(text="⬅️ Назад", callback_data="step_back")
     builder.adjust(1)
+
+    if not masters:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="⬅️ Начать сначала", callback_data="back_to_main")
+        await message.edit_text(
+            "❌ К сожалению, на выбранные параметры сейчас нет свободных специалистов.\n"
+            "Попробуйте изменить салон или услугу.", 
+            reply_markup=builder.as_markup()
+        )
+        return
     
     await message.edit_text("⭐ Выберите специалиста:", reply_markup=builder.as_markup())
     await state.set_state(BookingProcess.step_master)

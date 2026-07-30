@@ -108,13 +108,21 @@ async def handle_flow_selection(callback: types.CallbackQuery, callback_data: Fl
     
     # СЦЕНАРИЙ 4: ЗАПИСЬ ПО ТЕЛЕФОНУ
     if flow == "phone":
+        builder = InlineKeyboardBuilder()
+        builder.button(text="⬅️ Назад в меню", callback_data="back_to_main")
+        builder.adjust(1)
+
         await callback.message.edit_text(
-            "📞 Вы можете записаться напрямую через нашего администратора.\n\n"
-            "Нажмите на номер телефона ниже, чтобы совершить звонок:\n"
-            "👉 +7 (495) 111-22-33\n\n"
-            "Или введите /start, чтобы вернуться к автоматической записи."
+            "📞 *Запись по телефону*\n\n"
+            "Вы можете связаться с нашим администратором напрямую.\n"
+            "Он поможет подобрать удобное время и ответит на любые вопросы.\n\n"
+            "Тапните по номеру ниже, чтобы скопировать его и позвонить:\n"
+            "👉 `+74951112233`\n\n"  # Текст в обратных кавычках станет моноширинным
+            "⏰ Наш администратор на связи ежедневно с 09:00 до 21:00.",
+            parse_mode="Markdown", 
+            reply_markup=builder.as_markup()
         )
-        await state.clear()
+        await callback.answer()
         return
 
     from bot_manager.handlers.booking import show_salon_selection, show_master_selection, show_service_selection
