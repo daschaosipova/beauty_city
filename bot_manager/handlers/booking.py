@@ -1,5 +1,4 @@
 import datetime
-import asyncio
 from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -139,32 +138,6 @@ async def request_phone(message: types.Message, state: FSMContext):
         reply_markup=phone_keyboard
     )
     await state.set_state(BookingProcess.entering_phone)
-
-
-# =====================================================================
-# СЛУЖЕБНАЯ ФУНКЦИЯ: Отложенный запрос отзыва
-# =====================================================================
-async def ask_feedback_later(chat_id: int, appointment_id: int, bot: Bot):
-    """Отправит запрос отзыва через 5 секунд после создания записи"""
-    await asyncio.sleep(5)
-
-    try:
-        appointment = await sync_to_async(Appointment.objects.get)(id=appointment_id)
-        if appointment.feedback or appointment.feedback_asked:
-            return
-    except Appointment.DoesNotExist:
-        return
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Оставить отзыв", callback_data=f"leave_feedback_{appointment_id}")
-    builder.button(text="Позже", callback_data=f"skip_feedback_{appointment_id}")
-    builder.adjust(1)
-
-    await bot.send_message(
-        chat_id=chat_id,
-        text="Как прошёл визит?\n\nБудем рады вашему отзыву!",
-        reply_markup=builder.as_markup()
-    )
 
 
 # ==========================================
@@ -308,6 +281,13 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
     slot_date = await sync_to_async(lambda: appointment.slot.date)()
     slot_time = await sync_to_async(lambda: appointment.slot.time)()
 
+    feedback_builder = InlineKeyboardBuilder()
+    feedback_builder.button(
+        text="Оставить отзыв",
+        callback_data=f"leave_feedback_{appointment.id}"
+    )
+    feedback_builder.adjust(1)
+
     # Отправляем сообщение об успешной записи
     await message.answer(
         f"🎉 *Запись успешно оформлена!*\n\n"
@@ -316,17 +296,8 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         f"👤 *Специалист:* {master_name}\n"
         f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
         f"Ждем вас!",
-        reply_markup=types.ReplyKeyboardRemove(), 
+        reply_markup=feedback_builder.as_markup(),
         parse_mode="Markdown"
-    )
-
-    # Запуск таймера на 5 секунд для отзыва(для теста)
-    asyncio.create_task(
-        ask_feedback_later(
-            chat_id=message.from_user.id,
-            appointment_id=appointment.id,
-            bot=bot
-        )
     )
 
     await state.clear()
@@ -400,21 +371,6 @@ async def ask_feedback(callback: types.CallbackQuery, state: FSMContext):
     waiting_feedback[callback.from_user.id] = appointment_id
 
 
-@booking_router.callback_query(F.data.startswith("skip_feedback_"))
-async def skip_feedback(callback: types.CallbackQuery, state: FSMContext):
-    appointment_id = int(callback.data.replace("skip_feedback_", ""))
-
-    try:
-        appointment = await sync_to_async(Appointment.objects.get)(id=appointment_id)
-        appointment.feedback_asked = True
-        await sync_to_async(appointment.save)()
-    except Appointment.DoesNotExist:
-        pass
-
-    await callback.answer("Хорошо! Если захотите оставить отзыв позже, пишите.")
-    await callback.message.edit_text("Отзыв можно оставить в любое время, просто напишите нам.")
-
-
 @booking_router.message(F.text)
 async def save_feedback(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -428,7 +384,23 @@ async def save_feedback(message: types.Message, state: FSMContext):
             appointment.feedback_asked = True
             await sync_to_async(appointment.save)()
 
-            await message.answer("Спасибо за ваш отзыв! Мы ценим ваше мнение.")
+            salon_name = await sync_to_async(lambda: appointment.slot.salon.name)()
+            master_name = await sync_to_async(lambda: appointment.slot.master.full_name)()
+            service_name = await sync_to_async(lambda: appointment.service.name)()
+            slot_date = await sync_to_async(lambda: appointment.slot.date)()
+            slot_time = await sync_to_async(lambda: appointment.slot.time)()
+
+            await message.answer(
+                f"✅ Спасибо за ваш отзыв! Мы ценим ваше мнение.\n\n"
+                f"🎉 *Запись успешно оформлена!*\n\n"
+                f"📍 *Салон:* {salon_name}\n"
+                f"💇 *Процедура:* {service_name}\n"
+                f"👤 *Специалист:* {master_name}\n"
+                f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
+                f"Ждем вас!",
+                parse_mode="Markdown"
+            )
+
         except Appointment.DoesNotExist:
             await message.answer("Запись не найдена. Возможно, она уже удалена.")
     else:
