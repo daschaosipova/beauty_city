@@ -2,6 +2,7 @@ from aiogram import Router, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import FSInputFile
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
@@ -40,7 +41,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
     # ПРОВЕРКА ЮРИДИЧЕСКОГО БЛОКА
     if not client.is_terms_accepted:
         builder = InlineKeyboardBuilder()
+        builder.button(text="📄 Читать соглашение", callback_data="view_terms")
         builder.button(text="✅ Принять и продолжить", callback_data="accept_terms")
+        builder.adjust(1)
         
         await message.answer(
             "Добро пожаловать!\n\nДля продолжения работы с ботом, пожалуйста, "
@@ -52,6 +55,26 @@ async def cmd_start(message: types.Message, state: FSMContext):
         
     # Если клиент уже принимал соглашение ранее, сразу показываем главное меню
     await show_main_menu(message, state, message.from_user.first_name)
+
+@start_router.callback_query(F.data == "view_terms")
+async def handle_view_terms(callback: types.CallbackQuery):
+    # Укажите точный локальный путь к файлу соглашения на вашем сервере
+    pdf_path = "media/documents/terms.pdf" 
+    
+    try:
+        # Создаем объект файла для aiogram 3.x
+        document = FSInputFile(path=pdf_path, filename="terms.pdf")
+        
+        # Отправляем документ пользователю
+        await callback.message.answer_document(
+            document=document,
+            caption="Ознакомьтесь с полным текстом соглашения об обработке персональных данных."
+        )
+        # Гасим часики на инлайн-кнопке
+        await callback.answer()
+    except Exception as e:
+        # На случай, если файл удалили или путь указан неверно
+        await callback.answer("Ошибка при загрузке файла. Обратитесь в поддержку.", show_alert=True)
 
 
 # ОБРАБОТЧИК НАЖАТИЙ НА КНОПКУ «ПРИНЯТЬ СОГЛАШЕНИЕ»
