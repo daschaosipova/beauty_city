@@ -40,12 +40,38 @@ async def show_salon_selection(message: types.Message, state: FSMContext):
 
 async def show_service_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
+    flow = user_data.get('flow')
     
     def query_services():
-        qs = Service.objects.all()
+        # Если в памяти уже есть мастер (Флоу №2 «Любимый мастер»)
         if 'master' in user_data:
-            qs = qs.filter(master__id=user_data['master'])
-        return list(qs)
+            return list(Service.objects.filter(master__id=user_data['master']).distinct())
+            
+        # Если мы зашли со стороны салона (Флоу №1 «Ближайший салон»)
+        elif 'salon' in user_data:
+            # Находим мастеров этого салона, у которых есть свободные слоты
+            active_masters = TimeSlot.objects.filter(
+                salon_id=user_data['salon'],
+                is_booked=False,
+                date__gte=datetime.date.today()
+            ).values_list('master_id', flat=True).distinct()
+            
+            # Фильтруем услуги через обратную связь master_set
+            return list(Service.objects.filter(master__in=active_masters).distinct())
+            
+        # Флоу №3: Мы зашли со стороны процедур («Мне нужна процедура»)
+        elif flow == "service":
+            # Выбираем ID всех мастеров, у которых есть свободные окошки в будущем
+            available_master_ids = TimeSlot.objects.filter(
+                is_booked=False,
+                date__gte=datetime.date.today()
+            ).values_list('master_id', flat=True).distinct()
+            
+            # Показываем только те услуги, которые эти мастера умеют делать
+            return list(Service.objects.filter(master__in=available_master_ids).distinct())
+            
+        # Резервный вариант (на всякий случай)
+        return list(Service.objects.all())
         
     services = await sync_to_async(query_services)()
     builder = InlineKeyboardBuilder()
@@ -345,6 +371,13 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
         elif flow == "master": 
             await state.set_state(BookingProcess.step_master)
             await show_master_selection(callback.message, state)
+        elif flow == "service": 
+            from bot_manager.handlers.start import show_main_menu
+            await state.clear()
+            await callback.message.delete()
+            await show_main_menu(callback.message, state, callback.from_user.first_name)
+            await callback.answer()
+            return
 
     # --- ЭТАП: ВЫБОР МАСТЕРА ---
     elif current_state == BookingProcess.step_master:
