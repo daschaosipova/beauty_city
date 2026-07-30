@@ -86,14 +86,27 @@ async def show_master_selection(message: types.Message, state: FSMContext):
 
 async def show_date_time_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
-    
     def query_slots():
-        return list(TimeSlot.objects.filter(
-            master_id=user_data.get('master'),
-            salon_id=user_data.get('salon'),
-            is_booked=False,
-            date__gte=datetime.date.today()
-        ).order_by('date', 'time')[:12])
+    # 1. Базовые фильтры (не занято и дата не в прошлом)
+        filters = {
+            'is_booked': False,
+            'date__gte': datetime.date.today()
+        }
+        
+        # 2. Динамически добавляем мастера (если он уже выбран во флоу)
+        if user_data.get('master'):
+            filters['master_id'] = user_data['master']
+            
+        # 3. Динамически добавляем салон (если он уже выбран во флоу)
+        if user_data.get('salon'):
+            filters['salon_id'] = user_data['salon']
+            
+        # 4. Фильтр по услуге для Флоу №3 ("хочу процедуру")
+        # Если мастер и салон еще не выбраны, но услуга уже известна:
+        if user_data.get('service') and not user_data.get('master') and not user_data.get('salon'):
+            filters['master__services__id'] = user_data['service'] 
+
+        return list(TimeSlot.objects.filter(**filters).order_by('date', 'time').distinct()[:12])
         
     slots = await sync_to_async(query_slots)()
     builder = InlineKeyboardBuilder()
@@ -321,38 +334,63 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
     flow = user_data.get('flow')
 
+    # --- ЭТАП: ВЫБОР УСЛУГИ ---
     if current_state == BookingProcess.step_service:
-        if 'service' in user_data: 
-            del user_data['service']
+        user_data.pop('service', None)
         await state.set_data(user_data)
         
         if flow == "salon": 
+            await state.set_state(BookingProcess.step_salon)
             await show_salon_selection(callback.message, state)
         elif flow == "master": 
+            await state.set_state(BookingProcess.step_master)
             await show_master_selection(callback.message, state)
 
+    # --- ЭТАП: ВЫБОР МАСТЕРА ---
     elif current_state == BookingProcess.step_master:
-        if 'master' in user_data: 
-            del user_data['master']
+        user_data.pop('master', None)
+        # Если мы во флоу Процедуры, то на шаг мастера мы пришли из Даты/Времени.
+        # При возврате назад нужно стереть автоматически определенные салон и слот.
+        if flow == "service":
+            user_data.pop('slot', None)
+            user_data.pop('salon', None)
         await state.set_data(user_data)
         
         if flow == "salon": 
+            await state.set_state(BookingProcess.step_service)
             await show_service_selection(callback.message, state)
         elif flow == "service": 
+            await state.set_state(BookingProcess.step_date_time)
             await show_date_time_selection(callback.message, state)
 
+    # --- ЭТАП: ВЫБОР САЛОНА ---
+    elif current_state == BookingProcess.step_salon:
+        user_data.pop('salon', None)
+        await state.set_data(user_data)
+        
+        if flow == "master": 
+            await state.set_state(BookingProcess.step_service)
+            await show_service_selection(callback.message, state)
+        elif flow == "service": 
+            await state.set_state(BookingProcess.step_master)
+            await show_master_selection(callback.message, state)
+
+    # --- ЭТАП: ВЫБОР ДАТЫ И ВРЕМЕНИ ---
     elif current_state == BookingProcess.step_date_time:
-        if 'slot' in user_data: 
-            del user_data['slot']
+        user_data.pop('slot', None)
         await state.set_data(user_data)
         
         if flow == "salon": 
+            await state.set_state(BookingProcess.step_master)
             await show_master_selection(callback.message, state)
         elif flow == "master": 
+            await state.set_state(BookingProcess.step_salon)
             await show_salon_selection(callback.message, state)
         elif flow == "service": 
+            await state.set_state(BookingProcess.step_service)
             await show_service_selection(callback.message, state)
 
+    # Гасим анимацию часиков на кнопке Telegram
     await callback.answer()
 
 
