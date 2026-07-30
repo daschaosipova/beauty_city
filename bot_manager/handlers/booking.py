@@ -18,12 +18,27 @@ booking_router = Router()
 
 async def show_salon_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
+    flow = user_data.get('flow')
     
     def query_salons():
+        # Базовый запрос
         qs = Salon.objects.all()
+        
+        # Флоу №2 («Любимый мастер»): Фильтруем салоны, где работает выбранный мастер
         if 'master' in user_data:
             qs = qs.filter(master__id=user_data['master'])
-        return list(qs)
+            
+        # Флоу №1 («Ближайший салон»): Показываем только те салоны, где есть свободные окна
+        elif flow == "salon":
+            available_salon_ids = TimeSlot.objects.filter(
+                is_booked=False,
+                date__gte=datetime.date.today()
+            ).values_list('salon_id', flat=True).distinct()
+            
+            qs = qs.filter(id__in=available_salon_ids)
+            
+        return list(qs.distinct())
+    
         
     salons = await sync_to_async(query_salons)()
     builder = InlineKeyboardBuilder()
@@ -31,8 +46,18 @@ async def show_salon_selection(message: types.Message, state: FSMContext):
     for s in salons:
         builder.button(text=s.name, callback_data=SalonCallback(id=s.id).pack())
     
-    builder.button(text="⬅️ Назад в меню", callback_data="back_to_main")
+    builder.button(text="⬅️ Назад", callback_data="step_back")
     builder.adjust(1)
+
+    if not salons:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="⬅️ В главное меню", callback_data="back_to_main")
+        await message.edit_text(
+            "❌ К сожалению, сейчас нет салонов со свободными окнами для записи.\n"
+            "Пожалуйста, попробуйте позже.", 
+            reply_markup=builder.as_markup()
+        )
+        return
     
     await message.edit_text("📍 Выберите желаемый салон красоты:", reply_markup=builder.as_markup())
     await state.set_state(BookingProcess.step_salon)
@@ -395,6 +420,13 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
         elif flow == "service": 
             await state.set_state(BookingProcess.step_date_time)
             await show_date_time_selection(callback.message, state)
+        elif flow == "master":
+            from bot_manager.handlers.start import show_main_menu
+            await state.clear()
+            await callback.message.delete()
+            await show_main_menu(callback.message, state, callback.from_user.first_name)
+            await callback.answer()
+            return
 
     # --- ЭТАП: ВЫБОР САЛОНА ---
     elif current_state == BookingProcess.step_salon:
@@ -407,6 +439,13 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
         elif flow == "service": 
             await state.set_state(BookingProcess.step_master)
             await show_master_selection(callback.message, state)
+        elif flow == "salon":
+            from bot_manager.handlers.start import show_main_menu
+            await state.clear()
+            await callback.message.delete()
+            await show_main_menu(callback.message, state, callback.from_user.first_name)
+            await callback.answer()
+            return
 
     # --- ЭТАП: ВЫБОР ДАТЫ И ВРЕМЕНИ ---
     elif current_state == BookingProcess.step_date_time:
