@@ -219,4 +219,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-media/
+media/*
+!media/documents/
+!media/documents/terms.pdf
