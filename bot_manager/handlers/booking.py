@@ -461,7 +461,7 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
                 client=client,
                 slot=slot,
                 service_id=user_data['service'],
-                status='pending',
+                payment_status='pending',
                 promo_code_used=promo_code,  # Сохраняем промокод
                 discount_applied=discount_amount  # Сохраняем сумму скидки
             )

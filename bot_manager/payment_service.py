@@ -67,7 +67,7 @@ class PaymentService:
             Configuration.secret_key = self.secret_key
             
             payment = Payment.find_one(payment_id)
-            
+
             if payment.status == 'succeeded':
                 # Обновляем статус в базе
                 appointment = await sync_to_async(Appointment.objects.get)(payment_id=payment_id)
