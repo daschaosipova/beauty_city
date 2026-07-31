@@ -11,6 +11,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from bot_manager import tg_bot
 from bot_manager.handlers import get_client_router
+from bot_manager.handlers.payment_handler import payment_router
 
 
 ORGANIZER_ID = int(os.getenv("ORGANIZER_ID"))
@@ -26,6 +27,7 @@ async def main():
 
     # Подключаем модули (роутеры) всех разработчиков
     dp.include_router(get_client_router())
+    dp.include_router(payment_router)
 
     print("🚀 Бот успешно запущен и готов к работе!")
     await dp.start_polling(bot)

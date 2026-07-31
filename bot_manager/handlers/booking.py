@@ -8,6 +8,7 @@ from bot_manager.models import Client, TimeSlot, Appointment, Salon, Service, Ma
 from bot_manager.handlers.states_utils import (
     BookingProcess, SalonCallback, ServiceCallback, MasterCallback, SlotCallback
 )
+from bot_manager.handlers.payment_handler import show_payment_options, PaymentStates
 
 waiting_feedback = {}
 booking_router = Router()
@@ -15,6 +16,7 @@ booking_router = Router()
 # ==========================================
 # ФУНКЦИОНАЛ ОТРИСОВКИ ШАГОВ (ИНТЕРФЕЙС)
 # ==========================================
+
 
 async def show_salon_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
@@ -113,7 +115,6 @@ async def show_service_selection(message: types.Message, state: FSMContext):
 
 async def show_master_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
-    flow = user_data.get('flow')
     
     def query_masters():
         # 1. Сначала находим ID всех мастеров, у которых есть свободные окна в будущем
@@ -257,7 +258,7 @@ async def process_service_step(callback: types.CallbackQuery, callback_data: Ser
     await state.update_data(service=callback_data.id)
     user_data = await state.get_data()
     flow = user_data['flow']
-    
+
     if flow == "salon":        
         await show_master_selection(callback.message, state)
     elif flow == "master":     
@@ -333,29 +334,60 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         return
 
     def db_transaction():
-        client, _ = Client.objects.get_or_create(
-            telegram_id=message.from_user.id,
-            defaults={'username': message.from_user.username or ""}
-        )
-        client.phone = phone
-        client.save()
-        
         try:
-            slot = TimeSlot.objects.select_related('salon', 'master').get(id=user_data['slot'])
+            # БЛОКИРУЕМ СЛОТ ДЛЯ ИЗБЕЖАНИЯ ДВОЙНОЙ ЗАПИСИ
+            slot = TimeSlot.objects.select_for_update().get(id=user_data['slot'])
+
+            # ПРОВЕРКА 1: Есть ли уже запись для этого слота?
+            existing_appointment = Appointment.objects.filter(slot=slot).first()
+            if existing_appointment:
+                print(f"❌ УЖЕ ЕСТЬ ЗАПИСЬ {existing_appointment.id} для слота {slot.id}!")
+                # Синхронизируем статус слота
+                if not slot.is_booked:
+                    slot.is_booked = True
+                    slot.save()
+                return None
+            
+            # ПРОВЕРКА: если слот уже забронирован
             if slot.is_booked:
-                return None  
-                
+                print(f"❌ Слот {slot.id} уже занят!")
+                return None
+            
+            # Получаем или создаем клиента
+            client, _ = Client.objects.get_or_create(
+                telegram_id=message.from_user.id,
+                defaults={'username': message.from_user.username or ""}
+            )
+            client.phone = phone
+            client.save()
+
+            existing_appointment = Appointment.objects.filter(slot=slot).first()
+            if existing_appointment:
+                # Если есть - это ошибка! Слот должен быть свободен
+                print(f"❌ Слот {slot.id} уже имеет запись {existing_appointment.id}")
+                return None
+            # Бронируем слот
             slot.is_booked = True
             slot.save()
             
-            return Appointment.objects.create(
+            # Создаем запись
+            appointment = Appointment.objects.create(
                 client=client,
                 slot=slot,
                 service_id=user_data['service'],
-                status='pending'
+                payment_status='pending'
             )
+            
+            print(f"✅ Запись {appointment.id} создана для слота {slot.id}")
+            return appointment
+            
         except TimeSlot.DoesNotExist:
+            print(f"❌ Слот {user_data.get('slot')} не найден!")
             return None
+        except Exception as e:
+            print(f"❌ Ошибка при создании записи: {e}")
+            return None
+
 
     appointment = await sync_to_async(db_transaction)()
     
@@ -367,12 +399,8 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         await state.clear()
         return
 
-    # Запрашиваем связанные данные для красивого вывода
-    salon_name = await sync_to_async(lambda: appointment.slot.salon.name)()
-    master_name = await sync_to_async(lambda: appointment.slot.master.full_name)()
-    service_name = await sync_to_async(lambda: appointment.service.name)()
-    slot_date = await sync_to_async(lambda: appointment.slot.date)()
-    slot_time = await sync_to_async(lambda: appointment.slot.time)()
+    # Сохраняем appointment_id в состоянии
+    await state.update_data(appointment_id=appointment.id)
 
     feedback_builder = InlineKeyboardBuilder()
     feedback_builder.button(
@@ -381,19 +409,17 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
     )
     feedback_builder.adjust(1)
 
-    # Отправляем сообщение об успешной записи
-    await message.answer(
-        f"🎉 *Запись успешно оформлена!*\n\n"
-        f"📍 *Салон:* {salon_name}\n"
-        f"💇 *Процедура:* {service_name}\n"
-        f"👤 *Специалист:* {master_name}\n"
-        f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
-        f"Ждем вас!",
-        reply_markup=feedback_builder.as_markup(),
-        parse_mode="Markdown"
-    )
+    def get_service_price(appointment_id):
+        appointment = Appointment.objects.select_related('service').get(id=appointment_id)
+        return appointment.service.price
 
-    await state.clear()
+    service_price = await sync_to_async(get_service_price)(appointment.id)
+
+    # Показываем оплату
+    await show_payment_options(message, appointment.id, service_price, state)
+
+
+
 
 # ==========================================
 # НАВИГАЦИЯ НАЗАД (УМНЫЕ КНОПКИ)

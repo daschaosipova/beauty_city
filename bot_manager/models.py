@@ -99,10 +99,13 @@ class Appointment(models.Model):
     service = models.ForeignKey(Service, on_delete=models.PROTECT, verbose_name="Услуга")
     
     # Блок оплаты и чаевых
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="Статус записи")
+    payment_status  = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="Статус платежа")
     tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Чаевые мастера (руб.)")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания записи")
-
+    payment_id = models.CharField(max_length=100, blank=True, null=True, verbose_name="ID платежа")
+    payment_amount = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, verbose_name="Сумма оплаты")
+    payment_date = models.DateTimeField(blank=True, null=True, verbose_name="Дата оплаты")
+    # Блок отзыва
     feedback = models.TextField(blank=True, null=True, verbose_name="Текст отзыва")
     feedback_asked = models.BooleanField(default=False, verbose_name="Уже спрашивали отзыв?")
 
