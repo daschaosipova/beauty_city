@@ -9,6 +9,7 @@ from bot_manager.models import Client, TimeSlot, Appointment, Salon, Service, Ma
 from bot_manager.handlers.states_utils import (
     BookingProcess, SalonCallback, ServiceCallback, MasterCallback, SlotCallback
 )
+from bot_manager.handlers.payment_handler import show_payment_options, PaymentStates
 
 
 waiting_feedback = {}
@@ -40,6 +41,7 @@ def get_base_slot_queryset(user_data):
     time_filter = Q(date__gt=current_date) | Q(date=current_date, time__gte=current_time)
     
     return TimeSlot.objects.filter(time_filter, **filters)
+
 
 async def show_salon_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
@@ -151,7 +153,6 @@ async def show_service_selection(message: types.Message, state: FSMContext):
 
 async def show_master_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
-    flow = user_data.get('flow')
     
     def query_masters():
         slots_qs = get_base_slot_queryset(user_data)
@@ -324,7 +325,7 @@ async def process_service_step(callback: types.CallbackQuery, callback_data: Ser
     await state.update_data(service=callback_data.id)
     user_data = await state.get_data()
     flow = user_data['flow']
-    
+
     if flow == "salon":        
         await show_master_selection(callback.message, state)
     elif flow == "master":     
@@ -408,7 +409,20 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         client.save()
 
         try:
-            slot = TimeSlot.objects.select_related('salon', 'master').get(id=user_data['slot'])
+            # БЛОКИРУЕМ СЛОТ ДЛЯ ИЗБЕЖАНИЯ ДВОЙНОЙ ЗАПИСИ
+            slot = TimeSlot.objects.select_for_update().get(id=user_data['slot'])
+
+            # ПРОВЕРКА 1: Есть ли уже запись для этого слота?
+            existing_appointment = Appointment.objects.filter(slot=slot).first()
+            if existing_appointment:
+                print(f"❌ УЖЕ ЕСТЬ ЗАПИСЬ {existing_appointment.id} для слота {slot.id}!")
+                # Синхронизируем статус слота
+                if not slot.is_booked:
+                    slot.is_booked = True
+                    slot.save()
+                return None
+            
+            # ПРОВЕРКА: если слот уже забронирован
             if slot.is_booked:
                 return None
 
@@ -439,7 +453,12 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
                 promo_code_used=promo_code,  # Сохраняем промокод
                 discount_applied=discount_amount  # Сохраняем сумму скидки
             )
+            
+            print(f"✅ Запись {appointment.id} создана для слота {slot.id}")
+            return appointment
+            
         except TimeSlot.DoesNotExist:
+            print(f"❌ Слот {user_data.get('slot')} не найден!")
             return None
     appointment = await sync_to_async(db_transaction)()
     
@@ -479,6 +498,16 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
     )
     feedback_builder.adjust(1)
 
+    def get_service_price(appointment_id):
+        appointment = Appointment.objects.select_related('service').get(id=appointment_id)
+        return appointment.service.price
+
+    service_price = await sync_to_async(get_service_price)(appointment.id)
+
+    # Показываем оплату
+    await show_payment_options(message, appointment.id, service_price, state)
+
+
     # Отправляем сообщение об успешной записи
     await message.answer(
         f"🎉 *Запись успешно оформлена!*\n\n"
@@ -492,7 +521,6 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         parse_mode="Markdown"
     )
 
-    await state.clear()
 
 # ==========================================
 # НАВИГАЦИЯ НАЗАД (УМНЫЕ КНОПКИ)

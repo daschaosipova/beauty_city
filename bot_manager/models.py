@@ -99,7 +99,7 @@ class Appointment(models.Model):
     service = models.ForeignKey(Service, on_delete=models.PROTECT, verbose_name="Услуга")
     
     # Блок оплаты и чаевых
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="Статус записи")
+    payment_status  = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="Статус платежа")
     tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Чаевые мастера (руб.)")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания записи")
 
