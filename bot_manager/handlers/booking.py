@@ -3,11 +3,13 @@ from aiogram import Router, types, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from asgiref.sync import sync_to_async
-
+from django.db.models import Q
+from django.utils import timezone
 from bot_manager.models import Client, TimeSlot, Appointment, Salon, Service, Master, PromoCode
 from bot_manager.handlers.states_utils import (
     BookingProcess, SalonCallback, ServiceCallback, MasterCallback, SlotCallback
 )
+
 
 waiting_feedback = {}
 booking_router = Router()
@@ -16,27 +18,44 @@ booking_router = Router()
 # ФУНКЦИОНАЛ ОТРИСОВКИ ШАГОВ (ИНТЕРФЕЙС)
 # ==========================================
 
+def get_base_slot_queryset(user_data):
+    """
+    Вспомогательная функция для генерации базового QuerySet свободных слотов.
+    Учитывает текущую дату/время и фильтры по салону/мастеру из user_data.
+    """
+    now = timezone.now()
+    current_date = now.date()
+    current_time = now.time()
+
+    # Базовые фильтры
+    filters = {'is_booked': False}
+    
+    # Динамические фильтры из сессии
+    if user_data.get('salon'):
+        filters['salon_id'] = user_data['salon']
+    if user_data.get('master'):
+        filters['master_id'] = user_data['master']
+
+    # Сложные условия для времени (будущие дни ИЛИ сегодня, но позже текущего времени)
+    time_filter = Q(date__gt=current_date) | Q(date=current_date, time__gte=current_time)
+    
+    return TimeSlot.objects.filter(time_filter, **filters)
+
 async def show_salon_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     flow = user_data.get('flow')
     
     def query_salons():
-        # Базовый запрос
         qs = Salon.objects.all()
-        
-        # Флоу №2 («Любимый мастер»): Фильтруем салоны, где работает выбранный мастер
+
         if 'master' in user_data:
             qs = qs.filter(master__id=user_data['master'])
-            
-        # Флоу №1 («Ближайший салон»): Показываем только те салоны, где есть свободные окна
-        elif flow == "salon":
-            available_salon_ids = TimeSlot.objects.filter(
-                is_booked=False,
-                date__gte=datetime.date.today()
-            ).values_list('salon_id', flat=True).distinct()
-            
+
+        else:
+            slots_qs = get_base_slot_queryset(user_data)
+            available_salon_ids = slots_qs.values_list('salon_id', flat=True).distinct()
             qs = qs.filter(id__in=available_salon_ids)
-            
+        
         return list(qs.distinct())
     
         
@@ -69,34 +88,23 @@ async def show_service_selection(message: types.Message, state: FSMContext):
     promo_code = user_data.get('promo_code')
     
     def query_services():
-        # Если в памяти уже есть мастер (Флоу №2 «Любимый мастер»)
+    # 1. Если в памяти уже есть мастер (Флоу №2 «Любимый мастер»)
         if 'master' in user_data:
             return list(Service.objects.filter(master__id=user_data['master']).distinct())
-            
-        # Если мы зашли со стороны салона (Флоу №1 «Ближайший салон»)
-        elif 'salon' in user_data:
-            # Находим мастеров этого салона, у которых есть свободные слоты
-            active_masters = TimeSlot.objects.filter(
-                salon_id=user_data['salon'],
-                is_booked=False,
-                date__gte=datetime.date.today()
-            ).values_list('master_id', flat=True).distinct()
-            
-            # Фильтруем услуги через обратную связь master_set
-            return list(Service.objects.filter(master__in=active_masters).distinct())
-            
-        # Флоу №3: Мы зашли со стороны процедур («Мне нужна процедура»)
-        elif flow == "service":
-            # Выбираем ID всех мастеров, у которых есть свободные окошки в будущем
-            available_master_ids = TimeSlot.objects.filter(
-                is_booked=False,
-                date__gte=datetime.date.today()
-            ).values_list('master_id', flat=True).distinct()
-            
-            # Показываем только те услуги, которые эти мастера умеют делать
+        
+    # 2. Если мы зашли со стороны салона (Флоу №1) или со стороны процедур (Флоу №3)
+        elif 'salon' in user_data or flow == "service":
+        # Используем общую функцию: она сама учтет 'salon_id', если он есть в user_data,
+        # и применит актуальный фильтр по дате и времени.
+            slots_qs = get_base_slot_queryset(user_data)
+        
+        # Выбираем ID активных мастеров со свободными окошками
+            available_master_ids = slots_qs.values_list('master_id', flat=True).distinct()
+        
+        # Показываем только те услуги, которые эти мастера умеют делать
             return list(Service.objects.filter(master__in=available_master_ids).distinct())
-            
-        # Резервный вариант (на всякий случай)
+        
+    # Резервный вариант (на всякий случай)
         return list(Service.objects.all())
         
     services = await sync_to_async(query_services)()
@@ -146,29 +154,18 @@ async def show_master_selection(message: types.Message, state: FSMContext):
     flow = user_data.get('flow')
     
     def query_masters():
-        # 1. Сначала находим ID всех мастеров, у которых есть свободные окна в будущем
-        slot_filters = {
-            'is_booked': False,
-            'date__gte': datetime.date.today()
-        }
-        
-        # Если салон уже выбран (Флоу №1 «Салон») — ищем слоты только в этом салоне
-        if 'salon' in user_data:
-            slot_filters['salon_id'] = user_data['salon']
-            
-        available_master_ids = TimeSlot.objects.filter(**slot_filters).values_list('master_id', flat=True).distinct()
-        
-        # 2. Фильтруем саму модель Master
+        slots_qs = get_base_slot_queryset(user_data)
+    
+        available_master_ids = slots_qs.values_list('master_id', flat=True).distinct()
+    
         qs = Master.objects.filter(is_active=True, id__in=available_master_ids)
-        
-        # Если услуга уже выбрана (Флоу №1 и Флоу №3) — оставляем мастеров, умеющих её делать
+    
         if 'service' in user_data:
             qs = qs.filter(services__id=user_data['service'])
-            
-        # На всякий случай: если зашли с шага Салона, дополнительно проверяем прямую связь ManyToMany
+        
         if 'salon' in user_data:
             qs = qs.filter(salons__id=user_data['salon'])
-            
+        
         return list(qs.distinct())
         
     masters = await sync_to_async(query_masters)()
@@ -197,26 +194,17 @@ async def show_master_selection(message: types.Message, state: FSMContext):
 async def show_date_time_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     def query_slots():
-    # 1. Базовые фильтры (не занято и дата не в прошлом)
-        filters = {
-            'is_booked': False,
-            'date__gte': datetime.date.today()
-        }
-        
-        # 2. Динамически добавляем мастера (если он уже выбран во флоу)
-        if user_data.get('master'):
-            filters['master_id'] = user_data['master']
-            
-        # 3. Динамически добавляем салон (если он уже выбран во флоу)
-        if user_data.get('salon'):
-            filters['salon_id'] = user_data['salon']
-            
-        # 4. Фильтр по услуге для Флоу №3 ("хочу процедуру")
-        # Если мастер и салон еще не выбраны, но услуга уже известна:
+    # Получаем базовый запрос актуальных слотов
+        slots_qs = get_base_slot_queryset(user_data)
+    
+    # Добавляем специфичный фильтр по услуге, если нет мастера и салона
         if user_data.get('service') and not user_data.get('master') and not user_data.get('salon'):
-            filters['master__services__id'] = user_data['service'] 
-
-        return list(TimeSlot.objects.filter(**filters).order_by('date', 'time').distinct()[:12])
+            slots_qs = slots_qs.filter(master__services__id=user_data['service'])
+        
+    # Возвращаем отсортированный результат с лимитом
+        return list(
+        slots_qs.order_by('date', 'time').distinct()[:12]
+    )
         
     slots = await sync_to_async(query_slots)()
     builder = InlineKeyboardBuilder()
