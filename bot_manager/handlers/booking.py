@@ -752,7 +752,7 @@ async def save_feedback(message: types.Message, state: FSMContext):
             slot_time = await sync_to_async(lambda: appointment.slot.time)()
             original_price = await sync_to_async(lambda: appointment.service.price)()
 
-            # Берём промокод из БД
+            # Получаем промокод из записи
             promo_code = appointment.promo_code_used
             discount_amount = float(appointment.discount_applied or 0)
 
@@ -766,22 +766,36 @@ async def save_feedback(message: types.Message, state: FSMContext):
                 price_text += f"\n   *Скидка:* -{int(discount_amount)} руб."
                 price_text += f"\n   *Промокод:* {promo_code} ✅"
 
-            # Отправляем сообщение с карточкой и ценой
+            # ===== СОЗДАЕМ КЛАВИАТУРУ С 3 КНОПКАМИ =====
+            action_builder = InlineKeyboardBuilder()
+            action_builder.button(
+                text="✍️ Оставить отзыв",
+                callback_data=f"leave_feedback_{appointment.id}"
+            )
+            action_builder.button(
+                text="💳 Оплатить",
+                callback_data=f"pay_appointment_{appointment.id}"
+            )
+            action_builder.adjust(1)
+
+            # Отправляем сообщение с благодарностью и карточкой записи + 3 кнопки
             await message.answer(
                 f"✅ Спасибо за ваш отзыв! Мы ценим ваше мнение.\n\n"
-                f"📋 *Ваша запись:*\n\n"
+                f"🎉 *Запись успешно оформлена!*\n\n"
                 f"📍 *Салон:* {salon_name}\n"
                 f"💇 *Процедура:* {service_name}\n"
                 f"👤 *Специалист:* {master_name}\n"
                 f"{price_text}\n"
                 f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
-                f"Ждем вас! ❤️",
+                f"Выберите действие:",
+                reply_markup=action_builder.as_markup(),
                 parse_mode="Markdown"
             )
 
         except Appointment.DoesNotExist:
             await message.answer("❌ Запись не найдена. Возможно, она уже удалена.")
     else:
+        # Проверяем, не вводит ли клиент промокод
         current_state = await state.get_state()
         if current_state == BookingProcess.entering_promo:
             return
