@@ -5,10 +5,12 @@ from aiogram.filters.callback_data import CallbackData
 class BookingProcess(StatesGroup):
     choosing_flow = State()      # Главное меню выбора флоу
     step_salon = State()         # Шаг: Выбор салона
+    entering_promo = State()     # Шаг: Ввод промокода
     step_service = State()       # Шаг: Выбор процедуры (и просмотр цен)
     step_master = State()        # Шаг: Выбор мастера
     step_date_time = State()     # Шаг: Выбор даты и времени (слота)
     entering_phone = State()     # Шаг: Ввод контактов
+
 
 # Фабрики кнопок для обработки колбэков
 class FlowCallback(CallbackData, prefix="flow"):
