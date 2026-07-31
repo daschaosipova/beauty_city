@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from asgiref.sync import sync_to_async
 
-from bot_manager.models import Client, TimeSlot, Appointment, Salon, Service, Master
+from bot_manager.models import Client, TimeSlot, Appointment, Salon, Service, Master, PromoCode
 from bot_manager.handlers.states_utils import (
     BookingProcess, SalonCallback, ServiceCallback, MasterCallback, SlotCallback
 )
@@ -66,6 +66,7 @@ async def show_salon_selection(message: types.Message, state: FSMContext):
 async def show_service_selection(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     flow = user_data.get('flow')
+    promo_code = user_data.get('promo_code')
     
     def query_services():
         # Если в памяти уже есть мастер (Флоу №2 «Любимый мастер»)
@@ -100,14 +101,43 @@ async def show_service_selection(message: types.Message, state: FSMContext):
         
     services = await sync_to_async(query_services)()
     builder = InlineKeyboardBuilder()
-    
+
     for s in services:
-        builder.button(text=f"{s.name} — {int(s.price)} руб.", callback_data=ServiceCallback(id=s.id).pack())
-        
+        # Рассчитываем цену с учетом промокода
+        price_info = await calculate_price_with_discount(s.id, promo_code)
+
+        if promo_code and price_info.get('promo_code'):
+            # Если промокод применен - показываем старую и новую цену
+            button_text = (
+                f"{s.name} — {int(price_info['discounted_price'])} руб. "
+                f"(было {int(price_info['original_price'])} руб.) 🔥"
+            )
+        else:
+            # Обычная цена
+            button_text = f"{s.name} — {int(s.price)} руб."
+
+        builder.button(text=button_text, callback_data=ServiceCallback(id=s.id).pack())
+
+        # Кнопки для промокода
+    if promo_code:
+        builder.button(text=f"🎫 Промокод: {promo_code} ✅ (изменить)", callback_data="change_promo")
+    else:
+        builder.button(text="🎫 Ввести промокод", callback_data="enter_promo_from_services")
+
     builder.button(text="⬅️ Назад", callback_data="step_back")
     builder.adjust(1)
-    
-    await message.edit_text("💇 Выберите необходимую процедуру:", reply_markup=builder.as_markup())
+
+    # Заголовок с информацией о промокоде
+    header = "💇 Выберите необходимую процедуру:"
+    if promo_code:
+        header = f"💇 Выберите необходимую процедуру:\n🎫 *Промокод {promo_code} применен!*"
+
+    # Пытаемся отредактировать существующее сообщение, если не получается - отправляем новое
+    try:
+        await message.edit_text(header, reply_markup=builder.as_markup(), parse_mode="Markdown")
+    except Exception:
+        await message.answer(header, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
     await state.set_state(BookingProcess.step_service)
 
 
@@ -234,6 +264,55 @@ async def request_phone(message: types.Message, state: FSMContext):
 
 
 # ==========================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ПРОМОКОДАМИ
+# ==========================================
+
+async def calculate_price_with_discount(service_id: int, promo_code: str = None):
+    """Рассчитывает цену с учетом промокода"""
+
+    def get_service_and_promo():
+        service = Service.objects.get(id=service_id)
+        result = {
+            'original_price': float(service.price),
+            'discounted_price': float(service.price),
+            'promo_code': None,
+            'discount_amount': 0,
+            'discount_percent': 0,
+        }
+
+        if promo_code:
+            try:
+                promo = PromoCode.objects.get(code=promo_code.upper())
+
+                # Проверяем, активен ли промокод
+                if not promo.is_valid():
+                    return {**result, 'error': 'Промокод неактивен или истек срок действия'}
+
+                # Проверяем, применяется ли к этой услуге
+                if promo.services.exists() and not promo.services.filter(id=service_id).exists():
+                    return {**result, 'error': 'Промокод не применяется к этой услуге'}
+
+                # Рассчитываем скидку
+                original = float(service.price)
+                discounted = promo.apply_discount(original)
+                discount_amount = original - discounted
+                discount_percent = (discount_amount / original * 100) if original > 0 else 0
+
+                # Формируем результат
+                result['discounted_price'] = discounted
+                result['promo_code'] = promo.code
+                result['discount_amount'] = discount_amount
+                result['discount_percent'] = discount_percent
+
+            except PromoCode.DoesNotExist:
+                return {**result, 'error': 'Промокод не найден'}
+
+        return result
+
+    return await sync_to_async(get_service_and_promo)()
+
+
+# ==========================================
 # ОБРАБОТЧИКИ НАЖАТИЙ (ДИСПЕТЧЕРЫ)
 # ==========================================
 
@@ -339,24 +418,41 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         )
         client.phone = phone
         client.save()
-        
+
         try:
             slot = TimeSlot.objects.select_related('salon', 'master').get(id=user_data['slot'])
             if slot.is_booked:
-                return None  
-                
+                return None
+
             slot.is_booked = True
             slot.save()
-            
+
+            # Получаем промокод из состояния
+            promo_code = user_data.get('promo_code')
+            discount_amount = 0
+
+            if promo_code:
+                # Рассчитываем скидку (синхронно, без await)
+                try:
+                    service = Service.objects.get(id=user_data['service'])
+                    promo = PromoCode.objects.get(code=promo_code.upper())
+                    if promo.is_valid():
+                        original_price = float(service.price)
+                        discounted_price = promo.apply_discount(original_price)
+                        discount_amount = original_price - discounted_price
+                except (Service.DoesNotExist, PromoCode.DoesNotExist):
+                    discount_amount = 0
+
             return Appointment.objects.create(
                 client=client,
                 slot=slot,
                 service_id=user_data['service'],
-                status='pending'
+                status='pending',
+                promo_code_used=promo_code,  # Сохраняем промокод
+                discount_applied=discount_amount  # Сохраняем сумму скидки
             )
         except TimeSlot.DoesNotExist:
             return None
-
     appointment = await sync_to_async(db_transaction)()
     
     if not appointment:
@@ -373,6 +469,20 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
     service_name = await sync_to_async(lambda: appointment.service.name)()
     slot_date = await sync_to_async(lambda: appointment.slot.date)()
     slot_time = await sync_to_async(lambda: appointment.slot.time)()
+    original_price = await sync_to_async(lambda: appointment.service.price)()
+
+    # Проверяем промокод и рассчитываем цену со скидкой
+    user_data = await state.get_data()
+    promo_code = user_data.get('promo_code')
+    price_info = await calculate_price_with_discount(appointment.service.id, promo_code)
+    final_price = price_info['discounted_price']
+
+    # Формируем строку с ценой и скидкой
+    price_text = f"💰 *Сумма:* {int(final_price)} руб."
+    if promo_code and price_info.get('promo_code'):
+        price_text += f"\n   *Было:* {int(original_price)} руб."
+        price_text += f"\n   *Скидка:* -{int(price_info['discount_amount'])} руб. ({int(price_info['discount_percent'])}%)"
+        price_text += f"\n   *Промокод:* {promo_code} ✅"
 
     feedback_builder = InlineKeyboardBuilder()
     feedback_builder.button(
@@ -388,6 +498,7 @@ async def process_appointment_creation(message: types.Message, state: FSMContext
         f"💇 *Процедура:* {service_name}\n"
         f"👤 *Специалист:* {master_name}\n"
         f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
+        f"{price_text}\n\n"
         f"Ждем вас!",
         reply_markup=feedback_builder.as_markup(),
         parse_mode="Markdown"
@@ -496,6 +607,116 @@ async def process_step_back(callback: types.CallbackQuery, state: FSMContext):
 
 
 # ================================================================
+# ОБРАБОТЧИКИ ПРОМОКОДОВ
+# ================================================================
+
+@booking_router.callback_query(F.data == "enter_promo_from_services")
+async def process_enter_promo_from_services(callback: types.CallbackQuery, state: FSMContext):
+    """Клиент нажал 'Ввести промокод' на этапе выбора услуги"""
+    # Создаем клавиатуру с кнопкой "Пропустить"
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Пропустить", callback_data="skip_promo_from_services")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "🎫 Введите промокод:\n\n"
+        "Примеры: KID20, BIRTHDAY, MAN10",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+    await state.set_state(BookingProcess.entering_promo)
+
+
+@booking_router.callback_query(F.data == "skip_promo_from_services")
+async def process_skip_promo_from_services(callback: types.CallbackQuery, state: FSMContext):
+    """Клиент пропустил ввод промокода"""
+    await show_service_selection(callback.message, state)
+    await callback.answer()
+
+
+@booking_router.callback_query(F.data == "change_promo")
+async def process_change_promo(callback: types.CallbackQuery, state: FSMContext):
+    """Клиент хочет изменить или удалить промокод"""
+    # Очищаем промокод
+    await state.update_data(promo_code=None)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎫 Ввести другой промокод", callback_data="enter_promo_from_services")
+    builder.button(text="❌ Пропустить", callback_data="skip_promo_from_services")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "🔄 Промокод удален.\n\n"
+        "Хотите ввести другой промокод или продолжить без скидки?",
+        reply_markup=builder.as_markup()
+    )
+
+    await state.set_state(BookingProcess.entering_promo)
+
+    await callback.answer()
+
+
+@booking_router.message(F.text, BookingProcess.entering_promo)
+async def process_promo_code(message: types.Message, state: FSMContext):
+    """Обработка введенного промокода"""
+    promo_code = message.text.strip().upper()
+
+    def check_promo():
+        try:
+            promo = PromoCode.objects.get(code=promo_code)
+            if not promo.is_valid():
+                return {'error': 'Промокод неактивен или истек срок действия'}
+            return {'promo': promo, 'code': promo_code}
+        except PromoCode.DoesNotExist:
+            return {'error': 'Промокод не найден'}
+
+    result = await sync_to_async(check_promo)()
+
+    if 'error' in result:
+        # Промокод недействителен - предлагаем попробовать снова или пропустить
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🔄 Попробовать снова", callback_data="enter_promo_from_services")
+        builder.button(text="❌ Пропустить", callback_data="skip_promo_from_services")
+        builder.adjust(1)
+
+        await message.answer(
+            f"❌ {result['error']}\n\n"
+            f"Попробуйте ввести другой промокод или нажмите 'Пропустить'.",
+            reply_markup=builder.as_markup()
+        )
+        return
+
+    # Промокод действителен - сохраняем его
+    await state.update_data(promo_code=result['code'])
+
+    # Получаем информацию о скидке
+    def get_promo_info():
+        promo = PromoCode.objects.get(code=result['code'])
+        return {
+            'discount_value': float(promo.discount_value),
+            'discount_type': promo.discount_type,
+            'description': promo.description or ''
+        }
+
+    promo_info = await sync_to_async(get_promo_info)()
+
+    # Показываем сообщение об успешном применении
+    discount_text = f"{int(promo_info['discount_value'])}%" if promo_info[
+                                                                   'discount_type'] == 'percent' else f"{int(promo_info['discount_value'])} руб."
+
+    await message.answer(
+        f"✅ Промокод *{result['code']}* применен!\n\n"
+        f"🎁 Скидка: {discount_text}\n"
+        f"{promo_info['description']}\n\n"
+        f"Теперь выберите услугу со скидкой.",
+        parse_mode="Markdown"
+    )
+
+    # Показываем услуги с обновленными ценами
+    await show_service_selection(message, state)
+
+
+# ================================================================
 # ОБРАБОТЧИКИ ОТЗЫВОВ
 # ================================================================
 @booking_router.callback_query(F.data.startswith("leave_feedback_"))
@@ -523,24 +744,45 @@ async def save_feedback(message: types.Message, state: FSMContext):
             appointment.feedback_asked = True
             await sync_to_async(appointment.save)()
 
+            # Получаем данные для карточки
             salon_name = await sync_to_async(lambda: appointment.slot.salon.name)()
             master_name = await sync_to_async(lambda: appointment.slot.master.full_name)()
             service_name = await sync_to_async(lambda: appointment.service.name)()
             slot_date = await sync_to_async(lambda: appointment.slot.date)()
             slot_time = await sync_to_async(lambda: appointment.slot.time)()
+            original_price = await sync_to_async(lambda: appointment.service.price)()
 
+            # Берём промокод из БД
+            promo_code = appointment.promo_code_used
+            discount_amount = float(appointment.discount_applied or 0)
+
+            # Рассчитываем финальную цену
+            final_price = float(original_price) - discount_amount
+
+            # Формируем строку с ценой
+            price_text = f"💰 *Сумма:* {int(final_price)} руб."
+            if promo_code and discount_amount > 0:
+                price_text += f"\n   *Было:* {int(original_price)} руб."
+                price_text += f"\n   *Скидка:* -{int(discount_amount)} руб."
+                price_text += f"\n   *Промокод:* {promo_code} ✅"
+
+            # Отправляем сообщение с карточкой и ценой
             await message.answer(
                 f"✅ Спасибо за ваш отзыв! Мы ценим ваше мнение.\n\n"
-                f"🎉 *Запись успешно оформлена!*\n\n"
+                f"📋 *Ваша запись:*\n\n"
                 f"📍 *Салон:* {salon_name}\n"
                 f"💇 *Процедура:* {service_name}\n"
                 f"👤 *Специалист:* {master_name}\n"
+                f"{price_text}\n"
                 f"⏰ *Время визита:* {slot_date.strftime('%d.%m.%Y')} в {slot_time.strftime('%H:%M')}\n\n"
-                f"Ждем вас!",
+                f"Ждем вас! ❤️",
                 parse_mode="Markdown"
             )
 
         except Appointment.DoesNotExist:
-            await message.answer("Запись не найдена. Возможно, она уже удалена.")
+            await message.answer("❌ Запись не найдена. Возможно, она уже удалена.")
     else:
+        current_state = await state.get_state()
+        if current_state == BookingProcess.entering_promo:
+            return
         await message.answer("Спасибо за сообщение! Если это отзыв, вы можете оставить его в любое время.")
