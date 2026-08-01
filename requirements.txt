@@ -1,0 +1,4 @@
+Django==6.0.7
+aiogram==3.30.0
+python-dotenv==1.2.2
+asgiref==3.12.1

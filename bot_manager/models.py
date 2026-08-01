@@ -109,3 +109,4 @@ class Appointment(models.Model):
     class Meta:
         verbose_name = "Запись на процедуру"
         verbose_name_plural = "Записи на процедуры"
+
