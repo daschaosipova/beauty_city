@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+<<<<<<< Updated upstream
+=======
+
+# Local tooling
+.gigacode/
+>>>>>>> Stashed changes
