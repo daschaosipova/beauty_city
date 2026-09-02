@@ -32,7 +32,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 STAFF_PASSWORD = os.getenv('STAFF_PASSWORD', '')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
 ALLOWED_HOSTS = []
 
