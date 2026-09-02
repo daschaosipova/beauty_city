@@ -27,7 +27,6 @@ load_dotenv(BASE_DIR / '.env')
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 
-# Telegram bot
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 STAFF_PASSWORD = os.getenv('STAFF_PASSWORD', '')
 

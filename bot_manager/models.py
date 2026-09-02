@@ -1,8 +1,6 @@
 from django.db import models
 
 
-# 1. ТАБЛИЦА САЛОНОВ
-# Отвечает за сценарий: "Предложили выбрать ближайший салон"
 class Salon(models.Model):
     name = models.CharField(max_length=100, verbose_name="Название салона")
     address = models.CharField(max_length=255, verbose_name="Адрес")
@@ -16,8 +14,6 @@ class Salon(models.Model):
         verbose_name_plural = "Салоны"
 
 
-# 2. ТАБЛИЦА УСЛУГ
-# Отвечает за сценарии: "Выбрать процедуру" и "Интересно узнать цены"
 class Service(models.Model):
     name = models.CharField(max_length=150, verbose_name="Название процедуры")
     price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="Цена (руб.)")
@@ -31,8 +27,6 @@ class Service(models.Model):
         verbose_name_plural = "Услуги"
 
 
-# 3. ТАБЛИЦА МАСТЕРОВ (СПЕЦИАЛИСТОВ)
-# Отвечает за сценарии: "Попасть к любимому специалисту" и "Выбрать сразу мастера"
 class Master(models.Model):
     full_name = models.CharField(max_length=150, verbose_name="ФИО Мастера")
     salons = models.ManyToManyField(Salon, verbose_name="В каких салонах работает")
@@ -47,14 +41,10 @@ class Master(models.Model):
         verbose_name_plural = "Мастера"
 
 
-# 4. ТАБЛИЦА КЛИЕНТОВ И СОГЛАСИЯ НА ПД
-# Отвечает за сценарии: "Избежать штрафа за ПД", "Спросили номер телефона" и "100 дней после визита"
 class Client(models.Model):
     telegram_id = models.BigIntegerField(unique=True, verbose_name="ID пользователя в Telegram")
     username = models.CharField(max_length=100, blank=True, null=True, verbose_name="Никнейм (@username)")
     phone = models.CharField(max_length=20, blank=True, null=True, verbose_name="Номер телефона")
-    
-    # Юридический блок безопасности
     is_terms_accepted = models.BooleanField(default=False, verbose_name="Согласен с обработкой ПД?")
     terms_accepted_at = models.DateTimeField(blank=True, null=True, verbose_name="Дата и время принятия согласия")
 
@@ -66,8 +56,6 @@ class Client(models.Model):
         verbose_name_plural = "Клиенты"
 
 
-# 5. ТАБЛИЦА РАСПИСАНИЯ (СВОБОДНЫЕ ОКНА)
-# Отвечает за сценарии: "Доступные даты записи", "Свободные окна + адреса"
 class TimeSlot(models.Model):
     master = models.ForeignKey(Master, on_delete=models.CASCADE, verbose_name="Мастер")
     salon = models.ForeignKey(Salon, on_delete=models.CASCADE, verbose_name="Салон, где принимает мастер в этот день")
@@ -83,10 +71,6 @@ class TimeSlot(models.Model):
         verbose_name_plural = "Расписание (Слоты)"
 
 
-# 6. ТАБЛИЦА ЗАПИСЕЙ НА ПРОЦЕДУРЫ
-# Отвечает за сценарии: "Получил подтверждение", "Принять оплату и чаевые", "Запись по телефону через админку"
-# 7. ТАБЛИЦА ПРОМОКОДОВ
-# Отвечает за сценарий: "Получить скидку по промокоду"
 class PromoCode(models.Model):
     code = models.CharField(max_length=50, unique=True, verbose_name="Промокод")
     discount_percent = models.PositiveIntegerField(default=10, verbose_name="Скидка (%)")
@@ -103,7 +87,6 @@ class PromoCode(models.Model):
 
 
 class Appointment(models.Model):
-    # Статусы оплаты
     STATUS_CHOICES = [
         ('pending', 'Ожидает оплаты'),
         ('paid', 'Оплачено'),
@@ -111,7 +94,6 @@ class Appointment(models.Model):
         ('cancelled', 'Отменено'),
     ]
 
-    # Способы онлайн-оплаты (имитация)
     PAYMENT_METHOD_CHOICES = [
         ('card', 'Банковская карта'),
         ('sbp', 'СБП'),
@@ -120,25 +102,18 @@ class Appointment(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, verbose_name="Клиент")
     slot = models.OneToOneField(TimeSlot, on_delete=models.PROTECT, verbose_name="Выбранное время и мастер")
     service = models.ForeignKey(Service, on_delete=models.PROTECT, verbose_name="Услуга")
-
-    # Блок оплаты и чаевых
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name="Статус записи")
     tips_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Чаевые мастера (руб.)")
     paid_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата и время онлайн-оплаты")
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, blank=True, null=True, verbose_name="Способ оплаты")
     payment_id = models.CharField(max_length=40, blank=True, null=True, verbose_name="Номер транзакции (имитация)")
-
-    # Блок чаевых по ссылке администратора
     tips_token = models.CharField(max_length=40, blank=True, null=True, unique=True, verbose_name="Токен ссылки на чаевые")
     tips_paid_at = models.DateTimeField(null=True, blank=True, verbose_name="Дата и время оплаты чаевых")
     tips_payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, blank=True, null=True, verbose_name="Способ оплаты чаевых")
     tips_payment_id = models.CharField(max_length=40, blank=True, null=True, verbose_name="Номер транзакции чаевых (имитация)")
-
-    # Блок промокодов
     promo_code = models.ForeignKey(PromoCode, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Промокод")
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Скидка по промокоду (руб.)")
     final_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, verbose_name="Итоговая цена (руб.)")
-
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата создания записи")
 
     def __str__(self):
@@ -149,8 +124,6 @@ class Appointment(models.Model):
         verbose_name_plural = "Записи на процедуры"
 
 
-# 8. ТАБЛИЦА ОТЗЫВОВ
-# Отвечает за сценарий: "Услуга завершена → Хочу оставить хороший отзыв о специалисте"
 class Review(models.Model):
     RATING_CHOICES = [(i, str(i)) for i in range(1, 6)]
 
@@ -173,4 +146,3 @@ class Review(models.Model):
                 name="unique_review_per_appointment",
             )
         ]
-

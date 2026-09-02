@@ -13,7 +13,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write("Начало заполнения базы данных...")
 
-        # 1. ЗАПОЛНЕНИЕ САЛОНОВ
         salons_data = [
             {"name": "Ольга Beauty — Сити", "address": "г. Москва, Пресненская наб., д. 12, Башня 'Федерация'", "phone": "+7 (495) 111-22-33"},
             {"name": "Ольга Beauty — Патриаршие", "address": "г. Москва, Малый Козихинский пер., д. 8/18", "phone": "+7 (495) 222-33-44"},
@@ -24,8 +23,8 @@ class Command(BaseCommand):
         for data in salons_data:
             salon, _ = Salon.objects.get_or_create(name=data["name"], defaults=data)
             salons.append(salon)
+        salon_city, salon_patriarchy, salon_taganka = salons
 
-        # 2. ЗАПОЛНЕНИЕ УСЛУГ
         services_data = [
             {"name": "Женская стрижка + укладка", "price": Decimal("3500.00"), "duration_minutes": 60},
             {"name": "Сложное окрашивание волос", "price": Decimal("12000.00"), "duration_minutes": 240},
@@ -39,21 +38,20 @@ class Command(BaseCommand):
             service, _ = Service.objects.get_or_create(name=data["name"], defaults=data)
             services[data["name"]] = service
 
-        # 3. ЗАПОЛНЕНИЕ МАСТЕРОВ И СВЯЗЕЙ
         masters_data = [
             {
                 "full_name": "Александрова Елена Игоревна",
-                "salons": [salons[0], salons[1]],  # Сити, Патриаршие
+                "salons": [salon_city, salon_patriarchy],
                 "services": [services["Женская стрижка + укладка"], services["Сложное окрашивание волос"]]
             },
             {
                 "full_name": "Ахмедов Тимур Русланович",
-                "salons": [salons[0], salons[2]],  # Сити, Таганка
+                "salons": [salon_city, salon_taganka],
                 "services": [services["Мужская стрижка + борода"]]
             },
             {
                 "full_name": "Кривошеева Ольга Сергеевна",
-                "salons": [salons[1], salons[2]],  # Патриаршие, Таганка
+                "salons": [salon_patriarchy, salon_taganka],
                 "services": [services["Маникюр с покрытием гель-лак"], services["Архитектура и окрашивание бровей"]]
             }
         ]
@@ -68,7 +66,6 @@ class Command(BaseCommand):
         master_timur = Master.objects.get(full_name="Ахмедов Тимур Русланович")
         master_olga = Master.objects.get(full_name="Кривошеева Ольга Сергеевна")
 
-        # 4. ЗАПОЛНЕНИЕ КЛИЕНТОВ (Для тестов)
         # Один старый клиент (для теста сценария 100 дней) и один новый
         client_old, _ = Client.objects.get_or_create(
             telegram_id=111111111,
@@ -90,17 +87,14 @@ class Command(BaseCommand):
             }
         )
 
-        # 5. ЗАПОЛНЕНИЕ РАСПИСАНИЯ (ТАЙМСЛОТЫ)
-        # Генерируем слоты на 4 дня вперёд (сегодня + следующие 4 дня)
         today = datetime.date.today()
         days_ahead = 4
         dates = [today + datetime.timedelta(days=i) for i in range(days_ahead + 1)]
 
-        # Для каждого мастера: салоны (чередуются по дням) и время приёма
         schedule = [
             {
                 "master": master_elena,
-                "salons": [salons[0], salons[1]],  # Сити, Патриаршие
+                "salons": [salon_city, salon_patriarchy],
                 "times": [
                     datetime.time(10, 0),
                     datetime.time(12, 0),
@@ -109,7 +103,7 @@ class Command(BaseCommand):
             },
             {
                 "master": master_timur,
-                "salons": [salons[0], salons[2]],  # Сити, Таганка
+                "salons": [salon_city, salon_taganka],
                 "times": [
                     datetime.time(11, 0),
                     datetime.time(12, 0),
@@ -119,7 +113,7 @@ class Command(BaseCommand):
             },
             {
                 "master": master_olga,
-                "salons": [salons[1], salons[2]],  # Патриаршие, Таганка
+                "salons": [salon_patriarchy, salon_taganka],
                 "times": [
                     datetime.time(10, 0),
                     datetime.time(12, 0),
@@ -146,7 +140,6 @@ class Command(BaseCommand):
         created_slots[0].is_booked = True
         created_slots[0].save(update_fields=["is_booked"])
 
-        # 5.1. ЗАПОЛНЕНИЕ ПРОМОКОДОВ
         PromoCode.objects.get_or_create(
             code="SALON10",
             defaults={
@@ -164,18 +157,16 @@ class Command(BaseCommand):
             },
         )
 
-        # 6. ЗАПОЛНЕНИЕ ЗАПИСЕЙ (APPOINTMENTS)
-        # Создаем один завершенный визит 100 дней назад для старого клиента (тест триггера повторного приёма)
+        # Завершённый визит 100 дней назад — для теста сценария повторного приёма
         past_date = today - datetime.timedelta(days=100)
         past_slot, _ = TimeSlot.objects.get_or_create(
             master=master_elena,
-            salon=salons[0],
+            salon=salon_city,
             date=past_date,
             time=datetime.time(10, 0),
             defaults={"is_booked": True}
         )
 
-        # Запись для старого визита
         past_appointment, created = Appointment.objects.get_or_create(
             slot=past_slot,
             defaults={
@@ -190,7 +181,7 @@ class Command(BaseCommand):
             past_appointment.created_at = timezone.now() - datetime.timedelta(days=100)
             past_appointment.save()
 
-        # Создаем одну активную запись на сегодня (первый слот Елены, который мы пометили забронированным)
+        # Активная запись на сегодня — первый слот Елены, забронированный выше
         Appointment.objects.get_or_create(
             slot=created_slots[0],
             defaults={
