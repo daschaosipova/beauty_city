@@ -50,13 +50,13 @@ pip install -r requirements.txt
 ```ini
 BOT_TOKEN=123456789:AA...
 STAFF_PASSWORD=придумайте_пароль
-DJANGO_SECRET_KEY=придумайте_секрет   # необязательно; по умолчанию dev-ключ
+DJANGO_SECRET_KEY=придумайте_секрет   # обязательно; без него запуск невозможен
 DEBUG=false                          # необязательно; true/false, по умолчанию false
 ```
 
 - `BOT_TOKEN` — токен бота из [@BotFather](https://t.me/BotFather)
 - `STAFF_PASSWORD` — пароль для входа в раздел сотрудника (команда `/staff`)
-- `DJANGO_SECRET_KEY` — необязательный секрет Django (если не задан, используется dev-ключ из `core/settings.py`)
+- `DJANGO_SECRET_KEY` — обязательный секрет Django (без него проект не запустится)
 - `DEBUG` — необязательно: `true` — отладка, `false` — боевой режим (по умолчанию `false`)
 
 > Все переменные окружения читаются в одном месте — `core/settings.py`.

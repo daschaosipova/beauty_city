@@ -25,7 +25,7 @@ load_dotenv(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-f+0-ilg47dxcr2+&#!onk&rmll##qhf^=m15!vpfbfpg)e$690')
+SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 
 # Telegram bot
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
