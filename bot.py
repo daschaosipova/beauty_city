@@ -6,13 +6,11 @@ import django
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from dotenv import load_dotenv
-
-load_dotenv()
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 django.setup()
 
+from django.conf import settings  # noqa: E402
 from salon_bot.handlers import router  # noqa: E402
 from salon_bot.master_handlers import master_router  # noqa: E402
 from salon_bot.payment_handlers import payment_router  # noqa: E402
@@ -34,7 +32,7 @@ async def main():
             logging.StreamHandler(),
         ],
     )
-    token = os.getenv("BOT_TOKEN")
+    token = settings.BOT_TOKEN
     if not token:
         raise SystemExit("BOT_TOKEN not found in .env")
 

@@ -27,6 +27,10 @@ load_dotenv(BASE_DIR / '.env')
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-f+0-ilg47dxcr2+&#!onk&rmll##qhf^=m15!vpfbfpg)e$690')
 
+# Telegram bot
+BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+STAFF_PASSWORD = os.getenv('STAFF_PASSWORD', '')
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 

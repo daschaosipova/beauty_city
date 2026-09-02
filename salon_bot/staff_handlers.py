@@ -1,5 +1,4 @@
 import hmac
-import os
 from datetime import datetime
 
 from aiogram import F, Router
@@ -9,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 from aiogram.utils.callback_answer import CallbackAnswerMiddleware
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 from .keyboards import (
     staff_confirm_keyboard,
@@ -44,7 +44,7 @@ staff_router.callback_query.middleware(CallbackAnswerMiddleware())
 
 
 def _check_password(password):
-    expected = os.getenv("STAFF_PASSWORD", "")
+    expected = settings.STAFF_PASSWORD
     return bool(expected) and hmac.compare_digest(password, expected)
 
 
