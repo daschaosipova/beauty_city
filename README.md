@@ -79,12 +79,12 @@ python manage.py populate_db              # тестовые данные
 ### 3. Запуск
 
 ```bash
-python bot.py                # Telegram-бот
-python manage.py runserver   # админка: http://127.0.0.1:8000/admin/
+python manage.py runbot       # Telegram-бот
+python manage.py runserver    # админка: http://127.0.0.1:8000/admin/
 ```
 
 > Бот должен быть запущен **одним процессом**. Повторный запуск вызовет `TelegramConflictError`.
-> После изменения кода перезапустите бот (Ctrl+C → `python bot.py` заново).
+> После изменения кода перезапустите бот (Ctrl+C → `python manage.py runbot` заново).
 
 ### Команды и сценарии в боте
 
@@ -100,7 +100,6 @@ python manage.py runserver   # админка: http://127.0.0.1:8000/admin/
 
 ```
 project/
-├── bot.py                     # точка входа: создаёт Bot/Dispatcher, регистрирует роутеры
 ├── manage.py
 ├── requirements.txt
 ├── .env.example               # шаблон переменных окружения
@@ -110,7 +109,9 @@ project/
 │   ├── models.py              # Salon, Service, Master, Client, TimeSlot, PromoCode, Appointment, Review
 │   ├── admin.py               # админки всех моделей
 │   ├── migrations/            # миграции БД (0001–0005)
-│   └── management/commands/populate_db.py
+│   └── management/commands/
+│       ├── populate_db.py     # тестовые данные
+│       └── runbot.py          # запуск Telegram-бота (python manage.py runbot)
 └── salon_bot/
     ├── handlers.py            # /start (в т.ч. deep-link чаевых), /cancel, меню
     ├── salon_handlers.py      # сценарий «Выбрать салон»
@@ -131,7 +132,7 @@ project/
 
 ### Архитектура
 
-- **Один роутер на сценарий.** Каждый `*_handlers.py` регистрирует свой `Router`, который подключается в `bot.py`. Хендлеры внутри роутера не конфликтуют между сценариями.
+- **Один роутер на сценарий.** Каждый `*_handlers.py` регистрирует свой `Router`, который подключается в `bot_manager/management/commands/runbot.py`. Хендлеры внутри роутера не конфликтуют между сценариями.
 - **FSM-состояния** вынесены в `states.py` (`BookingStates`, `MasterFirstStates`, `ProcedureFirstStates`, `StaffStates`, `PromoStates`, `ReviewStates`, `TipStates`). Переходы между шагами — через `state.set_state()` + `StateFilter`.
 - **Клавиатуры** — чистые функции в `keyboards.py`, возвращающие `InlineKeyboardMarkup` / `ReplyKeyboardMarkup`. Callback-данные имеют префикс сценария: `salon:`, `master:`, `st:` (staff), `pay:`, `review:`, `tip:`.
 - **Вся работа с БД — в `services.py`** через `sync_to_async`. Хендлеры никогда не трогают ORM напрямую.
@@ -148,7 +149,7 @@ project/
 1. `states.py` — опционально новое `StatesGroup`.
 2. `services.py` — функции работы с БД через `sync_to_async`.
 3. `keyboards.py` — клавиатуры и callback-префиксы.
-4. Новый `*_handlers.py` с `Router` + подключить в `bot.py`.
+4. Новый `*_handlers.py` с `Router` + подключить в `bot_manager/management/commands/runbot.py`.
 5. `bot_manager/models.py` + миграция (`python manage.py makemigrations && python manage.py migrate`) — при изменении модели.
 6. Проверить `python manage.py check` и перезапустить бот.
 
